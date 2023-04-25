@@ -1,0 +1,1127 @@
+
+  
+library(magrittr)
+library(data.table)
+library(car)
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(broom)
+library(ggplot2)
+library(stringr)
+library(caret)
+
+options(scipen = 999)
+ 
+# The Dodgers is a professional baseball team and plays in the Major Baseball 
+# League. The team owns a 56,000-seat stadium and is interested in increasing 
+# the attendance of their fans during home games. *At the moment the team 
+# management would like to know if bobblehead promotions increase the attendance 
+# of the team's fans? 
+
+# The 2012 season data in the `events` table of SQLite database `data/dodgers.sqlite` contain for each of  81 home play the 
+# 
+# * month, 
+# * day, 
+# * weekday, 
+# * part of the day (day or night),
+# * attendance, 
+# * opponent, 
+# * temperature, 
+# * whether cap or shirt or bobblehead promotions were run, and 
+# * whether fireworks were present.
+
+# Download the Dataset
+
+# Connect to  `data/dodgers.sqlite`. Read table `events` into a variable in `R`.
+
+
+library(RSQLite) 
+con <- dbConnect(SQLite(), "C:/Users/yagiz/Desktop/4-2/GE-461/PromotionAnalysis/data/dodgers.sqlite") 
+
+events <- dbReadTable(con, "events")
+events <- as.data.table(events)
+
+rm(con)
+ 
+
+# Some Manipulations
+events[, day_of_week := factor(day_of_week, levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))]
+
+events[, month := factor(month, levels = c("APR","MAY","JUN","JUL","AUG","SEP","OCT"))]
+
+events[, lapply(.SD, function(x) if(is.character(x)) factor(x) else x)]
+ 
+
+events[, temp := round((temp- 32)*5/9)] # convert the temperature variable from Fahrenheit to Celsius
+ 
+
+
+# Preliminary Analysis 
+
+ 
+events[, .(total_attend = sum(attend)), month][order(-total_attend)]
+ 
+
+sum_attend <- events[, .(mean_attend = mean(attend),
+                            total_attend = sum(attend)), 
+                        by = .(day_of_week, month, day_night)]
+ 
+
+ggplot(data=sum_attend,aes(day_of_week, month, month)) +
+geom_jitter(aes(size = mean_attend, col = day_night), width = .1, height = .1, alpha=0.7) +
+scale_size(labels = scales::comma) +
+labs(title = "Average attendance", size = "attendance", col = "part of day",
+     x = "Weekday", y = "Month")
+ 
+
+
+ 
+  ggplot(data=sum_attend, aes(day_of_week, month)) +
+  geom_jitter(aes(size = total_attend, col = day_night), width = .1, height = .1, alpha=0.7) +
+  labs(title = "Total attendance", size = "attendance", col = "part of day",
+       x = "Weekday", y = "Month") +
+  scale_size(labels = scales::comma) +
+  guides(col = guide_legend(order = 1), 
+         shape = guide_legend(order = 2))
+ 
+
+# From the above two graphs, it can be observed that the games that are played 
+# in   day   are generally on Sunday and most of the games are played at night. 
+# There aren't many games played in October and average attendance is 
+# relatively low in May.
+# 
+# There are 4 types of promotions which are cap, shirt, fireworks and 
+# bobblehead. 
+# 
+
+cat("The number of occurrences of matches with no promotions is", 
+    nrow(events[bobblehead=="NO" & cap=="NO" & shirt=="NO" & fireworks=="NO"]), 
+    ". \nThe number of matches with only bobblehead promotion is", 
+    nrow(events[bobblehead=="YES" & cap=="NO" & shirt=="NO" & 
+                  fireworks=="NO"]), ".\nThe number of matches with only cap 
+    promotion is ", nrow(events[bobblehead=="NO" & cap=="YES" & shirt=="NO" & 
+                                  fireworks=="NO"]), ".\nThe number of matches 
+    with only shirt promotion is ", nrow(events[bobblehead=="NO" & cap=="NO" & 
+shirt=="YES" & fireworks=="NO"]), ".\nThe number of matches with only firework 
+promotion is ",  nrow(events[bobblehead=="NO" & cap=="NO" & shirt=="NO" & 
+                               fireworks=="YES"]))
+  
+# 
+# When we sum all of these, 51+11+2+3+14=81, which is the whole dataset. 
+# So, it is observed that there is at most one type of advertising in each 
+# match. For example, if bobblehead is 'YES' than the rest of the promotions 
+# are 'NO'. 
+# 
+# 
+# Number of occurrences ('YES') for each type of advertising is as follows:
+  
+      
+cat("cap =", length(which(events$cap=='YES')), 
+    "\nshirt =",length(which(events$shirt=='YES')),
+    "\nfireworks =", length(which(events$fireworks=='YES')),
+    "\nbobblehead =", length(which(events$bobblehead=='YES')))
+ 
+
+# Cap and shirt promotions are applied rarerly.
+
+# Variable Exploration
+
+## booblehead
+
+# Checking the effect of a promotion using the whole dataset does not seem 
+# right. It is possible that the shirt promotion increases the number of fans 
+# but because there are also other promotions in other matches where the shirt
+#  promotion does not exist, it would not be possible to see the increasing 
+#  effect of the shirt promotion. The reason is the other promotions may also 
+#  increase the number of fans. 
+# So, we should compare the effect of each promotion in regular days that do 
+# not have any promotion.
+# 
+# Now we will answer the question of "does the bobblehead promotion have a 
+# statistically significant effect on the attendance?".
+
+ 
+ggplot(data=events[cap=="NO" & shirt=="NO" & fireworks=="NO"], 
+       aes(bobblehead, attend)) +
+  geom_boxplot()
+ 
+
+# From the boxplot it is observed that having bobblehead strictly increases the
+# attendance. The median without bobblehead is around 37500, but it is around 
+# 58000
+# with bobblehead. They do not share any observation in their IQR.
+# 
+# We explored a relationship between bobblehead and attendance, but we should 
+# be able to statistically explain this relationship.
+
+ 
+t.test(events[cap=="NO" & shirt=="NO" & fireworks=="NO" & bobblehead=="YES", 
+              attend],
+       events[cap=="NO" & shirt=="NO" & fireworks=="NO" & bobblehead=="NO", 
+              attend])
+ 
+
+# The statistical test indicates that there is a significant difference between
+#  the two groups. So, indeed bobblehead has a statistically significant effect 
+#  on attendance.
+
+
+## cap
+
+# Start by checking the boxplot.
+
+ 
+ggplot(data=events[bobblehead=="NO" & shirt=="NO" & fireworks=="NO"], 
+       aes(cap, attend)) +
+  geom_boxplot() +
+  stat_summary(fun = mean, geom = "point", aes(color = "Mean"), 
+               shape = 16, size = 2) +
+  stat_summary(fun = median, geom = "point", aes(color = "Median"), 
+               shape = 16, size = 2) +
+  stat_summary(fun = mean, geom = "text", vjust = -1, 
+               aes(label = round(..y.., 2)), color = "red") +
+  stat_summary(fun = median, geom = "text", vjust = 1, 
+               aes(label = round(..y.., 2)), color = "blue") + 
+  scale_color_manual(name = "Statistic", 
+                     values = c("Mean" = "red", "Median" = "blue")) +
+  labs(x = "Cap Promotion", y = "Attend", title = "Boxplot with Mean and 
+       Median")
+
+ 
+
+# The plot shows that the mean and median attend under with cap and without cap 
+# do not differ significantly.
+
+ 
+t.test(events[bobblehead=="NO" & shirt=="NO" & fireworks=="NO"&cap=="YES", 
+              attend],
+       events[bobblehead=="NO" & shirt=="NO" & fireworks=="NO"&cap=="NO", 
+              attend])
+ 
+
+# The t-test supports our argument. So, there is no relationship between cap 
+# and attendance. 
+
+## cap & skies
+
+# Also, because there are not different promotions applied on same day, 
+# it is not possible to check combinations of promotions. However, it is 
+# possible that in clear days, the cap promotion increases the attendance 
+# because people may want to wear the cap to protect their heads from the sun. 
+# Now we are going to analyze the boxplot again but only in clear days.
+
+ 
+ggplot(data=events[bobblehead=="NO" & shirt=="NO" & fireworks=="NO" & skies == 
+                     "Clear"], aes(cap, attend)) +
+  geom_boxplot() +
+  stat_summary(fun = mean, geom = "point", aes(color = "Mean"), 
+               shape = 16, size = 2) +
+  stat_summary(fun = median, geom = "point", aes(color = "Median"), 
+               shape = 16, size = 2) +
+  stat_summary(fun = mean, geom = "text", vjust = -1, 
+               aes(label = round(..y.., 2)), color = "red") +
+  stat_summary(fun = median, geom = "text", vjust = 1, 
+               aes(label = round(..y.., 2)), color = "blue") + 
+  scale_color_manual(name = "Statistic", 
+                     values = c("Mean" = "red", "Median" = "blue")) +
+  labs(x = "Cap Promotions", y = "Attend", title = "Boxplot with Mean and 
+       Median")
+
+ 
+
+# There is only one day where cap == "YES" & skies=="clear". So, it seems, 
+# we cannot test our hypothesis. 
+
+## cap & day_night
+
+# Also, it is reasonable to think that the cap promotion may have more affect 
+# when it is day rather than night. 
+
+ 
+ggplot(data=events[bobblehead=="NO" & shirt=="NO" & fireworks=="NO" & 
+                     day_night == "Day"], aes(cap, attend)) +
+  geom_boxplot() +
+  stat_summary(fun = mean, geom = "point", aes(color = "Mean"), 
+               shape = 16, size = 2) +
+  stat_summary(fun = median, geom = "point", aes(color = "Median"), 
+               shape = 16, size = 2) +
+  stat_summary(fun = mean, geom = "text", vjust = -1, 
+               aes(label = round(..y.., 2)), color = "red") +
+  stat_summary(fun = median, geom = "text", vjust = 1, 
+               aes(label = round(..y.., 2)), color = "blue") + 
+  scale_color_manual(name = "Statistic", 
+                     values = c("Mean" = "red", "Median" = "blue")) +
+  labs(x = "Cap Promotions", y = "Attend", title = "Boxplot with Mean and 
+       Median")
+ 
+
+# Again we do have only 1 observation, so it is not possible again to test
+#  this hypothesis.
+
+## shirt 
+
+# Let's check the effect of the shirt promotion. 
+
+ 
+  ggplot(data=events[bobblehead=="NO" & cap=="NO" & fireworks=="NO"], 
+         aes(shirt, attend)) +
+  geom_boxplot() 
+ 
+
+# The boxplot suggests that the shirt promotion has a significant impact on 
+# the attendance.
+
+ 
+t.test(events[bobblehead=="NO" & cap=="NO" & fireworks=="NO"& shirt=="YES", 
+              attend],
+       events[bobblehead=="NO" & cap=="NO" & fireworks=="NO"& shirt=="NO", 
+              attend])
+ 
+
+
+# The p-value is 0.09626. So, we do not see a statistically significant 
+# difference between the average attendance of the games played under the 
+# shirt promotion or not. 
+
+## shirt & temperature
+
+# It is possible shirt promotion has different effects on different 
+# temperatures. Let's examine this.
+
+ 
+ggplot(data = events, aes(temp, attend)) +
+  geom_jitter() +
+  geom_text(data = subset(events, shirt %in% c("YES", "NO")),
+            aes(label = str_sub(shirt, 1, 2), col = shirt)) +
+  geom_smooth(se = FALSE)
+ 
+
+# The plot shows that when temperature is low, the shirt promotion results 
+# in more attendance. However, we have only three matches with shirt promotion, 
+# so it is not reasonable to completely trust on assumptions made from this 
+# plot. 
+
+
+## fireworks
+
+ 
+ggplot(data=events[bobblehead=="NO" & cap=="NO" & shirt=="NO"], aes(fireworks, 
+          attend)) +geom_boxplot()
+ 
+
+# It seems fireworks does not have an effect on attend as nearly all 
+# observations of group YES matches with group NO. 
+
+ 
+t.test(events[bobblehead=="NO" & cap=="NO" & shirt=="NO" & fireworks=="YES", 
+              attend],
+       events[bobblehead=="NO" & cap=="NO" & shirt=="NO" & fireworks=="NO", 
+              attend])
+ 
+
+# The t-test gives the p-value of 0.1341. Hence, we do not see a statistically 
+# significant difference between the average attendance of the games played 
+# under fireworks or not. 
+
+
+## day_night
+
+# We will check if there is an association between attendance and
+# whether the game is played in day light or night.
+
+ 
+ggplot(data=events, aes(day_night, attend)) +
+  geom_boxplot()
+ 
+
+# The boxplot does not suggest a strong difference.
+
+ 
+t.test(x=events[day_night=="Day", attend],
+       y=events[day_night=="Night", attend])
+ 
+
+#Since p-value (0.67) is large (greater than 0.05), we cannot reject null, 
+#which means there is no statistical difference between average attendance of 
+#games played in day and night.
+
+## skies
+
+ 
+ggplot(data=events, aes(skies, attend)) +
+  geom_boxplot()
+ 
+
+# The plot does not show an important difference.
+
+ 
+t.test(events[skies=="Clear", attend],
+       events[skies=="Cloudy", attend])
+ 
+
+# The t-test backs up our hypothesis. It says there is no statistically 
+# significant difference between the average attendance of the games played
+#  under clear and cloudy skies. 
+
+## skies & day_night 
+
+#It is reasonable to suggest that skies and day_night variables are related 
+#because a day with a clear sky probably has a different effect on attendance 
+#than a cloudy day.
+
+ 
+unique(events[, .(day_night, skies)])
+ 
+
+# So, those combinations' effects on attendance is going to be analyzed.
+
+ 
+ggplot(events, aes(x = interaction(day_night, skies), y = attend)) +
+  geom_boxplot() +
+  labs(x = "Conditions", y = "Attendance") +
+  ggtitle("Boxplot of Attendance by Day/Night and Skies")
+ 
+
+# The boxplot does not show a significant difference in attendances under 
+# different conditions. We can apply an ANOVA test to back-up or falsify our 
+# hypothesis.
+
+ 
+# perform ANOVA test
+model <- aov(attend ~ day_night * skies, data = events)
+
+# summarize ANOVA results
+summary(model)
+ 
+
+# Based on this output, we can see that none of the terms in the model are 
+# statistically significant at the significance level of 0.05. This means that 
+# there is no evidence of a significant difference in attendance based on the 
+# day_night and skies conditions or their interaction.
+
+## temperature
+# Now, we will check if there is an association between attendance and 
+# temperature.
+
+ 
+ggplot(data= events, aes(temp, attend)) +
+geom_jitter() +
+geom_smooth(se = FALSE)
+ 
+
+# From the loess fit, it seems that attendance is positively correlated with 
+# temperature until 23 celcius. After that point, they seems to be negatively 
+# correlated.
+
+## opponent
+
+ 
+events[, .(number_of_games= .N, 
+           mean_attend= mean(attend)), 
+       opponent][order(-number_of_games)]
+
+ggplot(data=events, aes(opponent, attend)) +
+geom_boxplot()
+ 
+
+# To see whether there is significant difference in the mean attendance values 
+# of the groups due to opponent, ANOVA test will be applied. 
+
+ 
+anova_model <- aov(attend ~ opponent, data = events)
+summary(anova_model)
+ 
+
+# The p-value is 0.183 which is greater than 0.05 . It means there is not any 
+# opponent whose attend values are significantly different from the others.
+
+## month
+
+ 
+events[, .(numberOfMatch=.N), month][order(-numberOfMatch)]
+ 
+
+# There are quite less matches in october compared to other months. 
+# Let's check mean attend in each month.
+
+ 
+events[, .(meanAttend=mean(attend)), month][order(-meanAttend)]
+ 
+
+# It seems some months June and July have bigger attendance values compared 
+# to others. 
+
+ 
+ggplot(data=events[, .(meanAttend=mean(attend)), month], 
+       aes(month, meanAttend)) +
+  geom_bar(stat="identity", fill="red") +
+  labs(title="Monthly Attend", x="Months", y="Attend")
+ 
+
+
+ 
+anova_model <- aov(attend ~ month, data = events)
+summary(anova_model)
+ 
+
+# ANOVA   suggests that least one of the month's mean is significantly 
+# different from the others. To determine which months are
+# significantly different from the rest, we'll apply   Tukey's HSD (honestly 
+# significant difference) test  . 
+# This test compares all pairwise differences between the month means and 
+# adjusts for multiple comparisons to control the family-wise error rate. 
+
+ 
+TukeyHSD(anova_model)
+ 
+
+# From this output, we can see that the mean attendance for month June is 
+# significantly different from month May (p < 0.05), but there is no significant 
+# difference between other groups (p > 0.05).
+
+## day
+
+# Maybe the majority of the citizens have a payment day within first week of a 
+# month. This may result in an increased attendance in the first week of a 
+# month. 
+
+ 
+events[, .(mean_attendance = mean(attend)), day][order(-mean_attendance)]
+ 
+
+# It seems highly random. 
+
+ 
+events[, day := factor(day)]
+anova_model <- aov(attend ~ day, data = events)
+summary(anova_model)
+ 
+# ANOVA suggests that none one of the month's mean is significantly different 
+# from the others.
+# 
+# Now we are going to divide day into 3 buckets, meaning 0-10, 10-20 & 20+. 
+# Then, we will examine attendance patterns of those buckets.
+
+ 
+events[, day := as.integer(day)]
+events[, day_bucket := 3]
+events[day <= 20, day_bucket := 2]
+events[day <= 10, day_bucket := 1]
+head(events[, .(day, day_bucket)])
+ 
+
+# Now let's check if there are serious differences in attendance for 
+# different day buckets.
+
+ 
+events[, day_bucket := factor(day_bucket)]
+
+ggplot(data=events, aes(day_bucket, attend)) +
+geom_boxplot()
+ 
+
+# The plot shows that attendance does not change with days. To statistically 
+# support our idea, we can apply ANOVA test.
+
+ 
+anova_model <- aov(attend ~ day_bucket, data = events)
+summary(anova_model)
+ 
+
+# ANOVA suggests that there is not any bucket that has significantly different 
+# attendance from others.
+# 
+# Maybe the issue lies in the width of the buckets. We can analyze the data in 
+# 5 days intervals instead of 10.
+
+ 
+events[, day_bucket := NULL]
+events[, day_bucket := 6]
+events[day <= 25, day_bucket := 5]
+events[day <= 20, day_bucket := 4]
+events[day <= 15, day_bucket := 3]
+events[day <= 10, day_bucket := 2]
+events[day <= 5, day_bucket := 1]
+
+head(events[, .(day, day_bucket)])
+ 
+
+ 
+events[, day_bucket := factor(day_bucket)]
+
+ggplot(data=events, aes(day_bucket, attend)) +
+geom_boxplot()
+ 
+
+# Still the plot shows that there is not any significance difference among 
+# buckets.
+
+ 
+anova_model <- aov(attend ~ day_bucket, data = events)
+summary(anova_model)
+ 
+
+# ANOVA test supports our inference. Of course there may be other
+# relationships, for example between bobblehead and days and those ones will 
+# be examined in the model development part.
+
+## bobblehead & day
+
+# It is possible that bobblehead promotions and days of a month have an 
+# association. Let's check that.
+
+ 
+events[, day := as.integer(day)]
+events[, day_bucket := 3]
+events[day <= 20, day_bucket := 2]
+events[day <= 10, day_bucket := 1]
+ 
+
+# Now let's check if there are serious differences in attendance for different 
+# day buckets.
+
+
+ 
+ggplot(events, aes(x = interaction(bobblehead, day_bucket), y = attend)) +
+  geom_boxplot()
+ 
+
+# There seems to be no relation between days of a month and bobblehead.
+
+
+## day_of_week
+
+ 
+events[, .(numberOfMatch=.N), day_of_week][order(-numberOfMatch)]
+ 
+
+# There are quite less matches in thursday compared to other days. 
+# Let's check mean attendance in each day.
+
+ 
+ggplot(data=events[, .(meanAttend=mean(attend)), day_of_week], 
+       aes(day_of_week, meanAttend)) +
+  geom_bar(stat="identity", fill="red") +
+  labs(title="Attendance per Day", x="Days", y="Attend")
+ 
+
+# Only Monday and Tuesday has a huge difference as seen in the above bar plot.
+
+ 
+anova_model <- aov(attend ~ day_of_week, data = events)
+summary(anova_model)
+ 
+
+# ANOVA suggests that least one of the day's mean is significantly different 
+# from the others. To determine which days are
+# significantly different from the rest, we'll apply Tukey's HSD 
+# (honestly significant difference) test. 
+# This test compares all pairwise differences between the day means and adjusts 
+# for multiple comparisons to control the family-wise error rate. 
+
+ 
+TukeyHSD(anova_model)
+ 
+
+# From this output, we can see that the mean attendance for Tuesday-Monday and 
+# Wednesday-Tuesday are significantly different from each other (p < 0.05), but 
+# there is no significant difference between other pairs (p > 0.05).
+
+
+## day_of_week & bobblehead
+
+# It is stated that attendance in Tuesday is significantly higher than Monday 
+# and Tuesday, but maybe it is because another variable. Now, we will check 
+# interacted variables' relationship.
+
+ 
+# Create a contingency table of day_of_week and bobblehead promotion
+cont_table <- table(events$day_of_week, events$bobblehead)
+cont_table
+ 
+
+# We resulted that bobblehead promotion has a statistically significant effect 
+# on the attendance and   contingency table   shows that days with high 
+# attendance have bobblehead promotions and days with less attendance have not 
+# bobblehead promotions. So, days and bobblehead promotions seem to be 
+# associated. We can check this by   chi-squared test of independence.
+
+ 
+chisq.test(cont_table)
+ 
+
+# p-value of 0.001864 indicates that the observed association between the
+# variables (days of the week and bobblehead promotions) is statistically 
+# significant. 
+
+## month & temperature
+
+# We concluded that the mean attendance for month June is significantly 
+# different from month May (p < 0.05), but there is no significant difference 
+# between other groups (p > 0.05). Maybe, this difference is due to temperature 
+# or another variable. Let's check this.
+
+ 
+ggplot(data = events, aes(temp, attend)) +
+  geom_jitter() +
+  geom_text(data = subset(events, month %in% c("MAY", "JUN")),
+            aes(label = str_sub(month, 1, 3), col = month)) +
+  geom_smooth(se = FALSE)
+ 
+
+# First of all, when the relationship between temperature and attendance is 
+# examined, people tend to go to stadium when the weather is mild, namely not 
+# cold and not hot. So, the most attendance happen within the range of IQR. 
+
+ 
+IQR_upper <- quantile(events[, temp], .75)
+IQR_lower <- quantile(events[, temp], .25)
+paste0("Q1 - Q3 = ", IQR_lower, " - ", IQR_upper) 
+ 
+# However, in may, although the weather is in this range, people are not tend 
+# to go to the stadium. So, obviously there are other factors that influence 
+# attendance. Let's observe if there is a bobblehead promotion on these matches.
+
+ 
+events[month %in% c("MAY", "JUN"), .(month, temp, bobblehead, attend)]
+ 
+
+ 
+ggplot(data=events[month %in% c("MAY", "JUN")], aes(month)) +
+  geom_bar(aes(fill=bobblehead))
+ 
+
+# Almost all days of JUNE have nice weather and also high attendances although 
+# not all of them have bobblehead promotion. However, when same conditions are 
+# applied in MAY, the attendance is quite low. So, it is not only the 
+# bobblehead, month and weather that affect attendance. There may be other 
+# variables or interaction terms.
+
+## step function
+
+# We can use step function by inputting some relevant variables.
+
+ 
+# Fit the full model with all possible predictors, including interaction terms
+events[, day := factor(day)]
+
+model_full <- lm(attend ~ (month+
+                             day+
+                             day_of_week+
+                             opponent+
+                             temp+
+                             pmax(0, temp - 23)+
+                             day_night+
+                             cap+
+                             shirt+
+                             bobblehead+
+                             bobblehead*day_of_week+
+                             skies*fireworks+
+                             skies*day_night*fireworks+
+                             skies*day_night*bobblehead+
+                             cap*shirt*temp+
+                             opponent*fireworks+
+                             fireworks*day_night*skies), data = events)
+
+# Use stepwise selection to find the best model with highest adjusted 
+# R-squared, including interaction terms
+model_best <- step(model_full, direction = "backward", k = log(nrow(events)))
+ 
+summary(model_best)
+ 
+# It gives an adjusted R2 value of `r summary(model_best)$adj.r.squared`. At 
+# first glance, it looks highly promising, but it is deceiving. When we 
+# discard variable   day   from the model, the AIC sharply increase and 
+# adjusted R2 decrease.
+
+ 
+AIC(update(model_best, .~. - day), model_best)
+ 
+
+ 
+summary(update(model_best, .~. - day))$adj.r.squared
+ 
+
+# We examined the effect of day on attendance. It seems highly unrelated, but 
+# probably by chance, it has a huge effect on attendance in this model. So, it 
+# is possible that the step function results in an overfitted model. 
+# We can apply   cross-validation   using the library caret to analyze if 
+# it overfits to train data.
+
+
+# First set the random seed since cross-validation randomly assigns rows to each
+# fold and we want to be able to produce our model exactly.
+set.seed(42)
+
+model <- train(  attend ~ month+
+                   day+
+                   day_of_week+
+                   opponent+
+                   temp+
+                   pmax(0, temp - 23)+
+                   day_night+
+                   cap+
+                   shirt+
+                   bobblehead+
+                   bobblehead*day_of_week+
+                   skies*fireworks+
+                   skies*day_night*fireworks+
+                   skies*day_night*bobblehead+
+                   cap*shirt*temp+
+                   opponent*fireworks+
+                   fireworks*day_night*skies, events,  method ="lm",  
+                 trControl = trainControl(method ="cv", number =10, verboseIter =TRUE))
+
+print(model)
+ 
+
+# The cross-validation result supports our hypothesis. The model is highly poor 
+# as the R2 value is `r round(model$results$Rsquared,2)`.
+# 
+# We are going to remove the variable "day" from the step function and try 
+# again.
+# Also, in this case instead of backward, the algorithm will move in a 
+# forward manner.
+
+ 
+# Fit the full model with all possible predictors, including interaction terms
+events[, day := factor(day)]
+
+model_full <- lm(attend ~ (month+
+                             day_of_week+
+                             opponent+
+                             temp+
+                             pmax(0, temp - 23)+
+                             day_night+
+                             skies+
+                             cap+
+                             shirt+
+                             bobblehead+
+                             skies*fireworks+
+                             day_night*fireworks+
+                             shirt*temp+
+                             opponent*fireworks+
+                             fireworks*opponent), data = events)
+
+# Use stepwise selection to find the best model with highest adjusted R-squared, 
+# including interaction terms
+model_best <- step(model_full, direction = "forward", k = log(nrow(events)))
+ 
+
+# The result has some useful insights.
+# The result suggests that opponents do not have an effect on attendance and 
+# the effect of fireworks is nearly negligible.
+
+
+# Model Development
+
+# We see that temperature, bobblehead and some months & days have effects on
+# attendance. Also, we stated that although we have small observations, 
+# temperature and shirt have an association. We can start our model by these 
+# variables.
+
+ 
+model1 <- lm(attend ~ temp + pmax(0, temp - 23) + bobblehead  + month + 
+               day_of_week + temp*shirt, data = events)
+
+summary(model1)
+ 
+
+# We are doing multiple linear regression and there are some conditions 
+# associated with linear 
+# regression, ie., linearity, nearly normal residuals, and constant 
+# variability. Using diagnostic tools we will assess
+# whether these conditions have been met or not. 
+
+# Let's assess the model results and diagnostics.
+# 
+# The p-values of variables temp, pmax(0, temp - 23), bobbleheadYES, 
+# day_of_weekTuesday, day_of_weekFriday, day_of_weekSaturday & 
+# day_of_weekSunday are < 0.05, so they are statistically significant. 
+# Also, p-value of the model is less than 0.05 and it indicates that there is 
+# evidence against the null hypothesis and that the relationship between the 
+# dependent variable and at least one independent variable in the model is 
+# statistically significant. 
+# 
+# The adjusted R-squared of `r round(summary(model1)$adj.r.squared,2)` 
+# indicates that the model explains approximately  
+# `r 100*round(summary(model1)$adj.r.squared,2)`% of the variation in 
+# attendance, which means that there is still a substantial amount of 
+# unexplained variability in the data. 
+# 
+# It is seen that not any of the month has a p-value that is less than 0.05. 
+# Let's check if   month   variable improves the model or not.
+
+ 
+AIC(update(model1, .~. - month), model1)
+ 
+
+# AIC says that months' effect is negligible. We can conduct   F-test   also.
+
+ 
+anova(update(model1, .~. - month), model1)
+ 
+
+# Null is that small model is correct. The null is consistent with data since 
+# p-value is large. Hence, month variable is not important. It may be the case 
+# that day_of_week and month are associated as it seems logical to expect 
+# different effects from days in different months. So, we can add an 
+# interaction term.
+
+ 
+model2 <- lm(attend ~ temp + pmax(0, temp - 23) + bobblehead  + 
+               month*day_of_week + temp*shirt, data = events)
+
+summary(model2)
+ 
+
+# Use AIC to see if the interaction term is important.
+
+ 
+AIC(update(model2, .~. - month:day_of_week), model2)
+ 
+# 
+# As seen although degrees of freedom increases a lot, AIC decreases. So, the 
+# interaction term is important. However, still adjusted R2 value is small. 
+# Probably there are other variables and interaction terms that have an effect 
+# on attendance. Now, we will add new variables to the model. 
+# 
+# It is reasonable to think that fans want to create huge shows in some matches 
+# to impress their biggest opponents. So, in these matches, the fireworks may be 
+# the part of the show and it can increase attendance. The variable   
+# fireworks:opponent   might reflect this interpretation. 
+
+ 
+model3 <- lm(attend ~ temp + pmax(0, temp - 23) + bobblehead  + 
+        month*day_of_week + temp*shirt + fireworks*opponent , data = events)
+
+summary(model3)
+ 
+
+# The adjusted R2 is increased to `r round(summary(model3)$adj.r.squared,2)` 
+# from `r round(summary(model2)$adj.r.squared,2)` by the new interaction term-   
+# fireworks:opponent  .
+
+# Let's check if the model is improved by AIC.
+
+ 
+AIC(model2, model3)
+ 
+
+# AIC suggests that the model is improved. So, with the new variable, the model 
+# is able to work better in an unseen data. Although we made an
+# important improvement, it is possible that there are other variables having 
+# effect on attendance. We did not add one promotion to our model which is 
+# cap. Let's add it to the model.
+
+ 
+model4 <- lm(attend ~ temp + pmax(0, temp - 23) + bobblehead  + 
+    month*day_of_week + temp*shirt + fireworks*opponent + cap, data = events)
+
+summary(model4)
+ 
+
+# Adjusted R2 is slightly increased from `r summary(model3)$adj.r.squared` to 
+# `r summary(model4)$adj.r.squared`, but the p-value of capYES is more than 
+# 0.05. 
+# Let's check if it improves the model.
+
+ 
+AIC(update(model4, .~. - cap), model4)
+ 
+
+# AIC suggests that it improves the model. 
+# 
+# Now analyze diagnostic plots of model4.
+
+ 
+plot(model4, which=1)
+ 
+
+# The ideal residual would be zero, because that would mean that the data point 
+# falls exactly on the regression line and that there is no difference between 
+# the   predicted   and   observed values   for that   particular data point. 
+# 
+# This is unlikely to happen, but we like   small residuals   and we want our 
+#   residuals in the   residuals plot   to be   randomly scattered around zero.  
+#   
+#   There's going to be some that are positive and some that are negative, 
+# because that corresponds to some points falling above the regression line, 
+# and other points falling below the regression line. And we want them to have 
+# absolutely no pattern, because   what we want is for the linear model is to 
+# capture all of the pattern in the data, and anything that's left over to be 
+# simply random scatter  .
+# 
+# The plot shows that residuals are centered at near zero. So, the model 
+# predicts very good. There is not any strong pattern in the residuals.
+# 
+# 
+# The residuals are not only be supposed to uncorrelated with fitted values, 
+# but also with each one of the predictor.
+
+ 
+car::residualPlots(model4)
+ 
+
+# From the graph, we can conclude that there is not any systematic error in any 
+# of the variables as there is no pattern in any of them.
+# 
+# The next condition is   nearly normal residuals  , which says that residuals 
+# should be   nearly normally distributed, centered at zero  .
+# 
+# This condition may not be satisfied if there are unusual observations that 
+# don't follow the trend of the rest of the data. 
+# We will check if the points are normally distributed around the fitted line.
+
+ 
+# fitted vs attend
+ggplot(model4, aes(.fitted, attend)) + geom_point() + 
+  geom_abline(color="darkblue")
+ 
+
+# In this plot, the points are equally far from the line in both the upper and 
+# lower side of the line. So, the points are nearly normally distributed around 
+# the line. 
+# The  Normal Q-Q plot makes it even easier to check the normality.
+
+ 
+plot(model4, which=2)
+ 
+
+# From the graph, although there are some deviations at tails, overall they 
+# fall along the diagonal line.
+
+
+# We can also apply   Shapiro Test   to see if these deviations are 
+# statistically significant.
+
+ 
+shapiro.test(rstandard(model4)) # null says standardized residuals have normal 
+# distribution. Since p is >.05, the residuals do not seem to have normal 
+# distribution.
+ 
+
+# Null hypothesis says residuals have normal distribution and because 
+# p-value > 0.05, the test supports our inference and says the residuals are 
+# normally distributed. So,   normality assumption is met  .
+# 
+# The last condition is   constant variability  , which says that variability 
+# of points around the least squares line should be roughly constant. 
+# This implies that the variability of residuals around the zero line should be 
+# roughly constant as well.
+# 
+# This condition is also called *homoscedasticity* and we can check this 
+# using a residuals plot.
+
+ 
+plot(model4, which=4)
+ 
+
+# This plot shows the relationship between the square root of the standardized 
+# residuals and the fitted values. 
+# The residuals are standardized by dividing by the MSE of the fitted line. 
+# The square root is taken to stabilize the variance of the residuals. 
+# From this graph, we check if there is a constant variance along residuals. 
+# Constant line means constant variance. Ideally, the points should be randomly
+#  distributed around a horizontal line with no discernible pattern. If there 
+#  is a pattern in the residuals, this could indicate heteroscedasticity. 
+#  Heteroscedasticity is a violation of the assumption of equal variance in a 
+#  linear regression model. In our  graph, there is not any strong trend but 
+#  there are some fluctuations. So, it is hard to visually reach a conclusion. 
+#  To be sure, it is useful to benefit from Non-Constant Variance Test.
+
+ 
+ncvTest(model4) 
+ 
+# Null hypothesis says the variance is constant. Since p is big (>.05), 
+# the test says that the variance is constant along the residuals.
+# 
+# Also, check if there is any   influential point  .
+
+ 
+# Generate Cook's distance values
+cooksd <- cooks.distance(model4)
+
+# Identify influential observations
+which(cooksd > 1)
+ 
+
+# So, there is   no influential point  .
+# 
+# Diagnostic plots show that   the model meets the requirements of linear 
+# regression. 
+# 
+# Also, adjusted R2 values and AIC support that the best model is model4.
+
+ 
+summary(model4)
+ 
+
+
+## Question - 1
+
+# Now we will answer the question "does bobblehead still increase the 
+# attendance?".
+# 
+# We can answer this by checking the coefficient of bobblehead in the final 
+# model.
+# 
+# Expected number of additional fans drawn to a home game with a bobblehead 
+# promotion;
+
+ 
+model4 %>% coef %>% .["bobbleheadYES"]
+ 
+# So, the point estimate is 
+# `r as.integer(round(model4 %>% coef %>% .["bobbleheadYES"]))`.
+# 
+# The confidence interval is (95%);
+
+ 
+confint(model4, parm= "bobbleheadYES")
+ 
+
+## Question - 2
+
+# Using our model, we can predict the number of attendees to a typical home game,
+# - on a Wednesday,
+# 
+# - in June, 
+# - the bobblehead promotion is applied,
+# 
+# - opponent is Angels,
+# 
+# - day_night is day,
+# 
+# - skies is clear,
+# 
+# - day is 4,
+# 
+# - temperature is 24,
+# 
+# - other promotions are not applied.
+# 
+# Besides point estimate, give a 90% prediction interval.
+
+ 
+prediction_data <- data.table(day_of_week = "Wednesday",
+                              month = "JUN",
+                              bobblehead = "YES",
+                              opponent = "Angels",
+                              day_night = "Day",
+                              skies = "Clear",
+                              day = "4",
+                              temp = 24, 
+                              shirt = "NO",
+                              fireworks = "NO",
+                              cap = "NO")
+
+predict(object=model4, prediction_data)
+ 
+
+# So, the point estimate is `r round(predict(object=model4, prediction_data))`.
+# The 90% prediction interval is, 
+
+predict(object=model4, prediction_data, interval = "prediction", level = 0.9)
+ 
